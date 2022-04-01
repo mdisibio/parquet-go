@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"math"
+	"reflect"
 	"sort"
 	"testing"
 	"testing/quick"
@@ -419,5 +420,47 @@ func TestBufferGenerateBloomFilters(t *testing.T) {
 
 	if err := quick.Check(f, nil); err != nil {
 		t.Error(err)
+	}
+}
+
+func TestBufferRoundtripNestedRepeated(t *testing.T) {
+	type C struct {
+		D int
+	}
+	type B struct {
+		C []C
+	}
+	type A struct {
+		B []B
+	}
+
+	// Write enough objects to exceed first page
+	buffer := parquet.NewBuffer()
+	var objs []A
+	for i := 0; i < 6; i++ {
+		o := A{[]B{{[]C{
+			{i},
+			{i},
+		}}}}
+		buffer.Write(&o)
+		objs = append(objs, o)
+	}
+
+	buf := new(bytes.Buffer)
+	w := parquet.NewWriter(buf, parquet.PageBufferSize(100))
+	w.WriteRowGroup(buffer)
+	w.Flush()
+	w.Close()
+
+	r := parquet.NewReader(bytes.NewReader(buf.Bytes()))
+	for i := 0; ; i++ {
+		o := new(A)
+		err := r.Read(o)
+		if err == io.EOF {
+			break
+		}
+		if !reflect.DeepEqual(*o, objs[i]) {
+			t.Errorf("points mismatch at row index %d: want=%v got=%v", i, objs[i], o)
+		}
 	}
 }
